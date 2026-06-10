@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: lummo_db
+      POSTGRES_USER: lummo
+      POSTGRES_PASSWORD: lummo_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lummo -d lummo_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://lummo:lummo_dev@db:5432/lummo_db
+      SECRET_KEY: lummo-dev-secret-key-cambiar-en-produccion
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
