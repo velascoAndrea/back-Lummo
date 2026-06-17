@@ -293,3 +293,21 @@ def run_seed(db):
 
     db.commit()
     print("✅ Seed completado: 90 preguntas, 3 diagnósticos PAA, 3 planes, 1 admin cargados.")
+
+
+if __name__ == "__main__":
+    import sys
+    from .database import engine, Base
+    from . import models  # noqa: F401 — ensures all models are registered
+
+    if "--reset" in sys.argv:
+        print("🗑️  Eliminando tablas...")
+        Base.metadata.drop_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
+        print("✅ Tablas recreadas.")
+
+    db = SessionLocal()
+    try:
+        run_seed(db)
+    finally:
+        db.close()
