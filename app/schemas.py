@@ -61,6 +61,7 @@ class OpcionOut(BaseModel):
 class PreguntaOut(BaseModel):
     id: int
     enunciado: str
+    imagen_url: Optional[str] = None
     opciones: List[OpcionOut]
 
     class Config:
@@ -163,6 +164,7 @@ class PreguntaAdminIn(BaseModel):
     tipo_pregunta_id: int = 1
     codigo: str
     enunciado: str
+    imagen_url: Optional[str] = None
     nivel: str
     respuestas: List[RespuestaAdminIn]
 
@@ -175,6 +177,7 @@ class RespuestaAdminUpdate(BaseModel):
 
 class PreguntaAdminUpdate(BaseModel):
     enunciado: Optional[str] = None
+    imagen_url: Optional[str] = None
     nivel: Optional[str] = None
     activo: Optional[bool] = None
     respuestas: Optional[List[RespuestaAdminUpdate]] = None

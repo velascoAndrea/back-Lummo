@@ -193,7 +193,7 @@ def get_preguntas(
             OpcionOut(id=r.id, texto=r.texto, orden=r.orden)
             for r in sorted(p.respuestas, key=lambda x: x.orden)
         ]
-        preguntas_out.append(PreguntaOut(id=p.id, enunciado=p.enunciado, opciones=opciones))
+        preguntas_out.append(PreguntaOut(id=p.id, enunciado=p.enunciado, imagen_url=p.imagen_url, opciones=opciones))
 
     return PreguntasResponse(
         preguntas=preguntas_out,
@@ -351,7 +351,7 @@ def finalizar_diagnostico(
         usuario_id=resultado.usuario_id,
         resultado_diag_id=resultado_id,
         token=token_str,
-        expira_en=datetime.utcnow() + timedelta(days=7),
+        expira_en=datetime.utcnow() + timedelta(days=365),
     )
     db.add(token_obj)
 

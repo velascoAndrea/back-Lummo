@@ -54,6 +54,7 @@ class Pregunta(Base):
     tipo_pregunta_id = Column(Integer, ForeignKey("tipo_pregunta.id"))
     codigo = Column(String(10), unique=True)
     enunciado = Column(Text, nullable=False)
+    imagen_url = Column(String(500), nullable=True)
     nivel = Column(String(10))
     activo = Column(Boolean, default=True)
     subtema = relationship("Subtema", back_populates="preguntas")
@@ -187,6 +188,14 @@ class TokenReporte(Base):
     usado = Column(Boolean, default=False)
     usuario = relationship("Usuario")
     resultado = relationship("ResultadoDiag")
+
+
+class Terminos(Base):
+    __tablename__ = "terminos"
+    id = Column(Integer, primary_key=True, default=1)
+    contenido = Column(Text, nullable=False)   # JSON array of {title, items[]}
+    fecha_modificacion = Column(DateTime, default=datetime.utcnow)
+    version = Column(String(20), default="1.0")
 
 
 class Suscripcion(Base):

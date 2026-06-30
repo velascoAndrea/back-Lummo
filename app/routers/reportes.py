@@ -13,8 +13,6 @@ def get_reporte(token: str, db: Session = Depends(get_db)):
     token_obj = db.query(TokenReporte).filter(TokenReporte.token == token).first()
     if not token_obj:
         raise HTTPException(status_code=404, detail="Reporte no encontrado")
-    if token_obj.expira_en < datetime.utcnow():
-        raise HTTPException(status_code=410, detail="El enlace del reporte ha expirado")
 
     resultado = db.query(ResultadoDiag).filter(
         ResultadoDiag.id == token_obj.resultado_diag_id
