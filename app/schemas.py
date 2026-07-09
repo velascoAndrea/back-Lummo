@@ -176,6 +176,7 @@ class RespuestaAdminUpdate(BaseModel):
 
 
 class PreguntaAdminUpdate(BaseModel):
+    codigo: Optional[str] = None
     enunciado: Optional[str] = None
     imagen_url: Optional[str] = None
     nivel: Optional[str] = None

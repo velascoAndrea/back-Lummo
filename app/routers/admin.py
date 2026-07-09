@@ -115,6 +115,11 @@ def editar_pregunta(
     p = db.query(Pregunta).filter(Pregunta.id == pregunta_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Pregunta no encontrada")
+    if body.codigo is not None and body.codigo.strip():
+        existing = db.query(Pregunta).filter(Pregunta.codigo == body.codigo.strip(), Pregunta.id != pregunta_id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"El código '{body.codigo}' ya está en uso")
+        p.codigo = body.codigo.strip().upper()
     if body.enunciado is not None:
         p.enunciado = body.enunciado
     if body.imagen_url is not None:
