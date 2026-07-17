@@ -1,3 +1,4 @@
+import random
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -5,11 +6,11 @@ from ..database import get_db
 from ..models import (
     Usuario, Rol, ResultadoDiag, RespuestaDiag, DetalleResultado,
     Diagnostico, DiagPregunta, Pregunta, Respuesta, Plan, TokenReporte,
-    TipoDiagnostico,
+    TipoDiagnostico, Formula,
 )
 from ..schemas import (
     IniciarDiagnosticoRequest, IniciarDiagnosticoResponse,
-    PreguntasResponse, PreguntaOut, OpcionOut,
+    PreguntasResponse, PreguntaOut, OpcionOut, FormulaOut,
     ResponderRequest, ResponderResponse,
     FinalizarResponse, DetalleSubtemaOut, PlanOut,
     RespuestaResumen,
@@ -102,12 +103,25 @@ def iniciar_diagnostico(req: IniciarDiagnosticoRequest, db: Session = Depends(ge
             password_cambiado=False,
             rol_id=rol_est.id if rol_est else None,
             graduado=req.graduado,
+            anio_graduacion=req.anio_graduacion if req.graduado else None,
             grado=req.grado,
             sector=req.sector,
         )
         db.add(usuario)
         db.flush()
         es_cuenta_nueva = True
+
+    if not es_cuenta_nueva:
+        # Refresca datos demográficos si vienen en la solicitud
+        if req.graduado is not None:
+            usuario.graduado = req.graduado
+            usuario.anio_graduacion = req.anio_graduacion if req.graduado else None
+            if req.graduado:
+                usuario.grado = None
+            elif req.grado:
+                usuario.grado = req.grado
+        if req.sector:
+            usuario.sector = req.sector
 
     diagnostico = db.query(Diagnostico).filter(
         Diagnostico.id == req.diagnostico_id,
@@ -160,6 +174,12 @@ def get_preguntas(
         .all()
     )
 
+    # Shuffle determinístico por sesión: mismo resultado_id ⇒ mismo orden
+    # (el estudiante puede salir y volver sin que cambie el orden), pero cada
+    # intento/estudiante ve un orden distinto.
+    rnd = random.Random(resultado_id)
+    rnd.shuffle(diag_preguntas)
+
     respondidas_rows = db.query(RespuestaDiag).filter(
         RespuestaDiag.resultado_diag_id == resultado_id
     ).all()
@@ -193,13 +213,38 @@ def get_preguntas(
             OpcionOut(id=r.id, texto=r.texto, orden=r.orden)
             for r in sorted(p.respuestas, key=lambda x: x.orden)
         ]
-        preguntas_out.append(PreguntaOut(id=p.id, enunciado=p.enunciado, imagen_url=p.imagen_url, opciones=opciones))
+        preguntas_out.append(PreguntaOut(
+            id=p.id, enunciado=p.enunciado, imagen_url=p.imagen_url,
+            mostrar_formulario=bool(dp.mostrar_formulario),
+            opciones=opciones,
+        ))
+
+    # Formulario consultable (fórmulas activas del diagnóstico)
+    formulas = (
+        db.query(Formula)
+        .filter(Formula.diagnostico_id == resultado.diagnostico_id, Formula.activo == True)
+        .order_by(Formula.orden, Formula.id)
+        .all()
+    )
+    formulario = [FormulaOut.model_validate(f) for f in formulas]
+
+    # Tiempo restante si el diagnóstico tiene límite configurado
+    diagnostico = db.query(Diagnostico).filter(Diagnostico.id == resultado.diagnostico_id).first()
+    tiempo_limite = diagnostico.tiempo_limite_minutos if diagnostico else None
+    tiempo_restante = None
+    if tiempo_limite:
+        transcurrido = (datetime.utcnow() - resultado.iniciado_en).total_seconds()
+        tiempo_restante = max(0, int(tiempo_limite * 60 - transcurrido))
 
     return PreguntasResponse(
         preguntas=preguntas_out,
         ultima_respondida=len(ids_respondidas),
         ids_respondidas=ids_respondidas,
         respuestas_dadas=respuestas_dadas,
+        formulario=formulario,
+        tiempo_limite_minutos=tiempo_limite,
+        tiempo_restante_segundos=tiempo_restante,
+        instrucciones=diagnostico.instrucciones if diagnostico else None,
     )
 
 
@@ -343,6 +388,9 @@ def finalizar_diagnostico(
     resultado.nivel_global = nivel_global
     resultado.puntaje_global = puntaje_global
     resultado.finalizado_en = datetime.utcnow()
+    # Cuánto tardó el estudiante en el examen (para reportes/analytics)
+    if resultado.iniciado_en:
+        resultado.duracion_segundos = int((resultado.finalizado_en - resultado.iniciado_en).total_seconds())
     db.flush()
 
     # Token de reporte

@@ -83,11 +83,17 @@ class Diagnostico(Base):
     nombre = Column(String(200), nullable=False)
     version = Column(String(10), default="1.0")
     activo = Column(Boolean, default=True)
+    tiempo_limite_minutos = Column(Integer, nullable=True)   # None = sin límite
+    instrucciones = Column(Text, nullable=True)              # se muestran antes de empezar
     creado_en = Column(DateTime, default=datetime.utcnow)
     tipo_diagnostico = relationship("TipoDiagnostico")
     preguntas = relationship(
         "DiagPregunta", back_populates="diagnostico",
         order_by="DiagPregunta.orden"
+    )
+    formulas = relationship(
+        "Formula", back_populates="diagnostico",
+        order_by="Formula.orden"
     )
 
 
@@ -97,8 +103,23 @@ class DiagPregunta(Base):
     diagnostico_id = Column(Integer, ForeignKey("diagnostico.id"))
     pregunta_id = Column(Integer, ForeignKey("pregunta.id"))
     orden = Column(Integer)
+    mostrar_formulario = Column(Boolean, default=False)
     diagnostico = relationship("Diagnostico", back_populates="preguntas")
     pregunta = relationship("Pregunta")
+
+
+class Formula(Base):
+    """Fórmula del formulario consultable durante el diagnóstico."""
+    __tablename__ = "formula"
+    id = Column(Integer, primary_key=True)
+    diagnostico_id = Column(Integer, ForeignKey("diagnostico.id"))
+    nombre = Column(String(120), nullable=False)          # ej. "Área del círculo"
+    contenido = Column(Text, nullable=True)               # ej. "A = πr²"
+    imagen_url = Column(String(500), nullable=True)       # alternativa/complemento visual
+    tip = Column(Text, nullable=True)                     # tip opcional
+    orden = Column(Integer, default=0)
+    activo = Column(Boolean, default=True)
+    diagnostico = relationship("Diagnostico", back_populates="formulas")
 
 
 # ── Usuario ───────────────────────────────────────────────────────────────────
@@ -120,6 +141,7 @@ class Usuario(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     activo = Column(Boolean, default=True)
     graduado = Column(Boolean, nullable=True)
+    anio_graduacion = Column(Integer, nullable=True)
     grado = Column(String(50), nullable=True)
     sector = Column(String(20), nullable=True)   # "publico" | "privado"
     rol = relationship("Rol")
@@ -146,6 +168,7 @@ class ResultadoDiag(Base):
     puntaje_global = Column(Float)
     iniciado_en = Column(DateTime, default=datetime.utcnow)
     finalizado_en = Column(DateTime, nullable=True)
+    duracion_segundos = Column(Integer, nullable=True)   # cuánto tardó el estudiante
     usuario = relationship("Usuario")
     diagnostico = relationship("Diagnostico")
     respuestas = relationship("RespuestaDiag", back_populates="resultado")

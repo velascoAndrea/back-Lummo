@@ -9,13 +9,14 @@ from ..database import get_db
 from ..models import (
     Pregunta, Respuesta, Diagnostico, DiagPregunta,
     Usuario, Subtema, Componente, TipoDiagnostico,
-    ResultadoDiag, Plan, Terminos,
+    ResultadoDiag, Plan, Terminos, Formula,
 )
 from ..schemas import (
     PreguntaAdminIn, PreguntaAdminUpdate,
     DiagnosticoAdminIn, DiagnosticoAdminUpdate,
     SubtemaAdminIn, SubtemaAdminUpdate,
     TipoDiagnosticoIn,
+    FormulaAdminIn, FormulaAdminUpdate, MostrarFormularioUpdate,
 )
 from ..core.security import get_current_admin
 
@@ -220,6 +221,8 @@ def list_diagnosticos(_admin=Depends(get_current_admin), db: Session = Depends(g
             "version": d.version,
             "tipo": d.tipo_diagnostico.nombre if d.tipo_diagnostico else None,
             "activo": d.activo,
+            "tiempo_limite_minutos": d.tiempo_limite_minutos,
+            "instrucciones": d.instrucciones,
             "total_preguntas": len(d.preguntas),
             "veces_completado": db.query(ResultadoDiag).filter(
                 ResultadoDiag.diagnostico_id == d.id,
@@ -240,6 +243,8 @@ def crear_diagnostico(
         tipo_diagnostico_id=body.tipo_diagnostico_id,
         nombre=body.nombre,
         version=body.version,
+        tiempo_limite_minutos=body.tiempo_limite_minutos,
+        instrucciones=body.instrucciones,
     )
     db.add(d)
     db.flush()
@@ -265,6 +270,11 @@ def editar_diagnostico(
         d.version = body.version
     if body.activo is not None:
         d.activo = body.activo
+    if "tiempo_limite_minutos" in body.model_fields_set:
+        # None explícito ⇒ quitar el límite; entero ⇒ establecerlo
+        d.tiempo_limite_minutos = body.tiempo_limite_minutos or None
+    if "instrucciones" in body.model_fields_set:
+        d.instrucciones = (body.instrucciones or "").strip() or None
     if body.pregunta_ids is not None:
         db.query(DiagPregunta).filter(DiagPregunta.diagnostico_id == diag_id).delete()
         for i, pid in enumerate(body.pregunta_ids):
@@ -294,6 +304,7 @@ def get_preguntas_diagnostico(
             "nivel": dp.pregunta.nivel,
             "imagen_url": dp.pregunta.imagen_url,
             "orden": dp.orden,
+            "mostrar_formulario": bool(dp.mostrar_formulario),
         }
         for dp in items
     ]
@@ -338,6 +349,117 @@ def quitar_pregunta_diagnostico(
     if not dp:
         raise HTTPException(status_code=404, detail="Pregunta no está en este diagnóstico")
     db.delete(dp)
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/diagnosticos/{diag_id}/preguntas/{pregunta_id}/formulario")
+def toggle_formulario_pregunta(
+    diag_id: int,
+    pregunta_id: int,
+    body: MostrarFormularioUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    dp = db.query(DiagPregunta).filter(
+        DiagPregunta.diagnostico_id == diag_id,
+        DiagPregunta.pregunta_id == pregunta_id,
+    ).first()
+    if not dp:
+        raise HTTPException(status_code=404, detail="Pregunta no está en este diagnóstico")
+    dp.mostrar_formulario = body.mostrar_formulario
+    db.commit()
+    return {"ok": True, "mostrar_formulario": dp.mostrar_formulario}
+
+
+# ── Formulario (fórmulas por diagnóstico) ─────────────────────────────────────
+
+def _formula_out(f: Formula):
+    return {
+        "id": f.id,
+        "diagnostico_id": f.diagnostico_id,
+        "nombre": f.nombre,
+        "contenido": f.contenido,
+        "imagen_url": f.imagen_url,
+        "tip": f.tip,
+        "orden": f.orden,
+        "activo": f.activo,
+    }
+
+
+@router.get("/diagnosticos/{diag_id}/formulas")
+def list_formulas(diag_id: int, _admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    formulas = (
+        db.query(Formula)
+        .filter(Formula.diagnostico_id == diag_id)
+        .order_by(Formula.orden, Formula.id)
+        .all()
+    )
+    return [_formula_out(f) for f in formulas]
+
+
+@router.post("/diagnosticos/{diag_id}/formulas", status_code=201)
+def crear_formula(
+    diag_id: int,
+    body: FormulaAdminIn,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    d = db.query(Diagnostico).filter(Diagnostico.id == diag_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    if not body.nombre.strip():
+        raise HTTPException(status_code=400, detail="El nombre de la fórmula es requerido")
+    if not (body.contenido and body.contenido.strip()) and not body.imagen_url:
+        raise HTTPException(status_code=400, detail="La fórmula debe tener contenido de texto o imagen")
+    f = Formula(
+        diagnostico_id=diag_id,
+        nombre=body.nombre.strip(),
+        contenido=body.contenido,
+        imagen_url=body.imagen_url,
+        tip=body.tip,
+        orden=body.orden,
+    )
+    db.add(f)
+    db.commit()
+    db.refresh(f)
+    return _formula_out(f)
+
+
+@router.put("/formulas/{formula_id}")
+def editar_formula(
+    formula_id: int,
+    body: FormulaAdminUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    f = db.query(Formula).filter(Formula.id == formula_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Fórmula no encontrada")
+    if body.nombre is not None:
+        f.nombre = body.nombre.strip()
+    if "contenido" in body.model_fields_set:
+        f.contenido = body.contenido
+    if "imagen_url" in body.model_fields_set:
+        f.imagen_url = body.imagen_url or None
+    if "tip" in body.model_fields_set:
+        f.tip = body.tip
+    if body.orden is not None:
+        f.orden = body.orden
+    if body.activo is not None:
+        f.activo = body.activo
+    if not (f.contenido and f.contenido.strip()) and not f.imagen_url:
+        raise HTTPException(status_code=400, detail="La fórmula debe tener contenido de texto o imagen")
+    db.commit()
+    return _formula_out(f)
+
+
+@router.delete("/formulas/{formula_id}")
+def eliminar_formula(formula_id: int, _admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    f = db.query(Formula).filter(Formula.id == formula_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Fórmula no encontrada")
+    db.delete(f)
     db.commit()
     return {"ok": True}
 
