@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel, EmailStr
 
 
@@ -28,6 +28,8 @@ class IniciarDiagnosticoRequest(BaseModel):
     email: EmailStr
     diagnostico_id: int
     graduado: Optional[bool] = None
+    anio_graduacion: Optional[int] = None
+    fecha_nacimiento: Optional[date] = None
     grado: Optional[str] = None
     sector: Optional[str] = None
 
@@ -61,7 +63,22 @@ class OpcionOut(BaseModel):
 class PreguntaOut(BaseModel):
     id: int
     enunciado: str
+    imagen_url: Optional[str] = None
+    mostrar_formulario: bool = False
+    tipo: str = "opcion_multiple"   # opcion_multiple | respuesta_escrita
     opciones: List[OpcionOut]
+
+    class Config:
+        from_attributes = True
+
+
+class FormulaOut(BaseModel):
+    id: int
+    nombre: str
+    contenido: Optional[str] = None
+    imagen_url: Optional[str] = None
+    tip: Optional[str] = None
+    orden: int = 0
 
     class Config:
         from_attributes = True
@@ -69,7 +86,8 @@ class PreguntaOut(BaseModel):
 
 class RespuestaResumen(BaseModel):
     pregunta_id: int
-    respuesta_id: int
+    respuesta_id: Optional[int] = None
+    respuesta_texto: Optional[str] = None   # preguntas de respuesta escrita
     es_correcta: bool
     respuesta_correcta_id: Optional[int] = None
     respuesta_correcta_letra: Optional[str] = None
@@ -82,11 +100,16 @@ class PreguntasResponse(BaseModel):
     ultima_respondida: int
     ids_respondidas: List[int] = []
     respuestas_dadas: List[RespuestaResumen] = []
+    formulario: List[FormulaOut] = []
+    tiempo_limite_minutos: Optional[int] = None
+    tiempo_restante_segundos: Optional[int] = None
+    instrucciones: Optional[str] = None
 
 
 class ResponderRequest(BaseModel):
     pregunta_id: int
-    respuesta_id: int
+    respuesta_id: Optional[int] = None      # opción múltiple
+    respuesta_texto: Optional[str] = None   # respuesta escrita
 
 
 class ResponderResponse(BaseModel):
@@ -163,6 +186,7 @@ class PreguntaAdminIn(BaseModel):
     tipo_pregunta_id: int = 1
     codigo: str
     enunciado: str
+    imagen_url: Optional[str] = None
     nivel: str
     respuestas: List[RespuestaAdminIn]
 
@@ -174,7 +198,9 @@ class RespuestaAdminUpdate(BaseModel):
 
 
 class PreguntaAdminUpdate(BaseModel):
+    codigo: Optional[str] = None
     enunciado: Optional[str] = None
+    imagen_url: Optional[str] = None
     nivel: Optional[str] = None
     activo: Optional[bool] = None
     respuestas: Optional[List[RespuestaAdminUpdate]] = None
@@ -184,6 +210,8 @@ class DiagnosticoAdminIn(BaseModel):
     tipo_diagnostico_id: int
     nombre: str
     version: str = "1.0"
+    tiempo_limite_minutos: Optional[int] = None
+    instrucciones: Optional[str] = None
     pregunta_ids: List[int]
 
 
@@ -191,7 +219,34 @@ class DiagnosticoAdminUpdate(BaseModel):
     nombre: Optional[str] = None
     version: Optional[str] = None
     activo: Optional[bool] = None
+    tiempo_limite_minutos: Optional[int] = None
+    instrucciones: Optional[str] = None
     pregunta_ids: Optional[List[int]] = None
+
+
+class FormulaAdminIn(BaseModel):
+    nombre: str
+    contenido: Optional[str] = None
+    imagen_url: Optional[str] = None
+    tip: Optional[str] = None
+    orden: int = 0
+
+
+class FormulaAdminUpdate(BaseModel):
+    nombre: Optional[str] = None
+    contenido: Optional[str] = None
+    imagen_url: Optional[str] = None
+    tip: Optional[str] = None
+    orden: Optional[int] = None
+    activo: Optional[bool] = None
+
+
+class MostrarFormularioUpdate(BaseModel):
+    mostrar_formulario: bool
+
+
+class ConfiguracionUpdate(BaseModel):
+    valor: str
 
 
 class SubtemaAdminIn(BaseModel):

@@ -58,6 +58,7 @@ jobs:
               DATABASE_URL=${{ secrets.PROD_DATABASE_URL }},
               SECRET_KEY=${{ secrets.SECRET_KEY }},
               ALLOWED_ORIGINS=https://${{ secrets.PROD_AMPLIFY_DOMAIN }},
-              ENVIRONMENT=prod
+              ENVIRONMENT=prod,
+              IMAGES_BUCKET=${{ secrets.IMAGES_BUCKET }}
             }" \
             --region ${{ secrets.AWS_REGION }}

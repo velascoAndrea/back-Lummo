@@ -5,7 +5,7 @@ from .database import engine, Base
 
 # Models must be imported before create_all so Base.metadata is populated
 from . import models  # noqa: F401
-from .routers import auth, diagnosticos, reportes, planes, admin
+from .routers import auth, diagnosticos, reportes, planes, admin, lista_espera
 
 Base.metadata.create_all(bind=engine)
 
@@ -27,8 +27,23 @@ app.include_router(diagnosticos.router, prefix="/api/v1")
 app.include_router(reportes.router,     prefix="/api/v1")
 app.include_router(planes.router,       prefix="/api/v1")
 app.include_router(admin.router,        prefix="/api/v1")
+app.include_router(lista_espera.router, prefix="/api/v1")
 
 
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "LUMMO API", "env": os.getenv("ENVIRONMENT", "local")}
+
+
+@app.get("/api/v1/terminos")
+def get_terminos_public():
+    from .database import get_db
+    from .models import Terminos
+    db = next(get_db())
+    try:
+        t = db.query(Terminos).filter(Terminos.id == 1).first()
+        if not t:
+            return {"contenido": "[]", "fecha_modificacion": None, "version": "1.0"}
+        return {"contenido": t.contenido, "fecha_modificacion": t.fecha_modificacion, "version": t.version}
+    finally:
+        db.close()

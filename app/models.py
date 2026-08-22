@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Float,
-    DateTime, ForeignKey
+    DateTime, Date, ForeignKey
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -54,6 +54,7 @@ class Pregunta(Base):
     tipo_pregunta_id = Column(Integer, ForeignKey("tipo_pregunta.id"))
     codigo = Column(String(10), unique=True)
     enunciado = Column(Text, nullable=False)
+    imagen_url = Column(String(500), nullable=True)
     nivel = Column(String(10))
     activo = Column(Boolean, default=True)
     subtema = relationship("Subtema", back_populates="preguntas")
@@ -82,11 +83,17 @@ class Diagnostico(Base):
     nombre = Column(String(200), nullable=False)
     version = Column(String(10), default="1.0")
     activo = Column(Boolean, default=True)
+    tiempo_limite_minutos = Column(Integer, nullable=True)   # None = sin límite
+    instrucciones = Column(Text, nullable=True)              # se muestran antes de empezar
     creado_en = Column(DateTime, default=datetime.utcnow)
     tipo_diagnostico = relationship("TipoDiagnostico")
     preguntas = relationship(
         "DiagPregunta", back_populates="diagnostico",
         order_by="DiagPregunta.orden"
+    )
+    formulas = relationship(
+        "Formula", back_populates="diagnostico",
+        order_by="Formula.orden"
     )
 
 
@@ -96,8 +103,23 @@ class DiagPregunta(Base):
     diagnostico_id = Column(Integer, ForeignKey("diagnostico.id"))
     pregunta_id = Column(Integer, ForeignKey("pregunta.id"))
     orden = Column(Integer)
+    mostrar_formulario = Column(Boolean, default=False)
     diagnostico = relationship("Diagnostico", back_populates="preguntas")
     pregunta = relationship("Pregunta")
+
+
+class Formula(Base):
+    """Fórmula del formulario consultable durante el diagnóstico."""
+    __tablename__ = "formula"
+    id = Column(Integer, primary_key=True)
+    diagnostico_id = Column(Integer, ForeignKey("diagnostico.id"))
+    nombre = Column(String(120), nullable=False)          # ej. "Área del círculo"
+    contenido = Column(Text, nullable=True)               # ej. "A = πr²"
+    imagen_url = Column(String(500), nullable=True)       # alternativa/complemento visual
+    tip = Column(Text, nullable=True)                     # tip opcional
+    orden = Column(Integer, default=0)
+    activo = Column(Boolean, default=True)
+    diagnostico = relationship("Diagnostico", back_populates="formulas")
 
 
 # ── Usuario ───────────────────────────────────────────────────────────────────
@@ -119,6 +141,8 @@ class Usuario(Base):
     creado_en = Column(DateTime, default=datetime.utcnow)
     activo = Column(Boolean, default=True)
     graduado = Column(Boolean, nullable=True)
+    anio_graduacion = Column(Integer, nullable=True)
+    fecha_nacimiento = Column(Date, nullable=True)
     grado = Column(String(50), nullable=True)
     sector = Column(String(20), nullable=True)   # "publico" | "privado"
     rol = relationship("Rol")
@@ -145,6 +169,7 @@ class ResultadoDiag(Base):
     puntaje_global = Column(Float)
     iniciado_en = Column(DateTime, default=datetime.utcnow)
     finalizado_en = Column(DateTime, nullable=True)
+    duracion_segundos = Column(Integer, nullable=True)   # cuánto tardó el estudiante
     usuario = relationship("Usuario")
     diagnostico = relationship("Diagnostico")
     respuestas = relationship("RespuestaDiag", back_populates="resultado")
@@ -157,6 +182,7 @@ class RespuestaDiag(Base):
     resultado_diag_id = Column(Integer, ForeignKey("resultado_diag.id"))
     pregunta_id = Column(Integer, ForeignKey("pregunta.id"))
     respuesta_id = Column(Integer, ForeignKey("respuesta.id"), nullable=True)
+    respuesta_texto = Column(Text, nullable=True)   # lo que escribió (preguntas de respuesta escrita)
     es_correcta = Column(Boolean)
     tiempo_segundos = Column(Integer, nullable=True)
     resultado = relationship("ResultadoDiag", back_populates="respuestas")
@@ -189,6 +215,21 @@ class TokenReporte(Base):
     resultado = relationship("ResultadoDiag")
 
 
+class Terminos(Base):
+    __tablename__ = "terminos"
+    id = Column(Integer, primary_key=True, default=1)
+    contenido = Column(Text, nullable=False)   # JSON array of {title, items[]}
+    fecha_modificacion = Column(DateTime, default=datetime.utcnow)
+    version = Column(String(20), default="1.0")
+
+
+class Configuracion(Base):
+    """Ajustes globales de la plataforma editables desde el admin (clave/valor)."""
+    __tablename__ = "configuracion"
+    clave = Column(String(50), primary_key=True)
+    valor = Column(String(200), nullable=False)
+
+
 class Suscripcion(Base):
     __tablename__ = "suscripcion"
     id = Column(Integer, primary_key=True)
@@ -202,3 +243,18 @@ class Suscripcion(Base):
     renovacion_automatica = Column(Boolean, default=False)
     usuario = relationship("Usuario")
     plan = relationship("Plan")
+
+
+class ListaEspera(Base):
+    """
+    Correos capturados por la landing de soylummo.com antes de que Lummo Test abra.
+
+    El correo es único: apuntarse dos veces no crea dos filas ni es un error para
+    quien lo hace — el router responde 409 y la landing lo trata como éxito.
+    """
+    __tablename__ = "lista_espera"
+    id = Column(Integer, primary_key=True)
+    correo = Column(String(160), unique=True, nullable=False, index=True)
+    origen = Column(String(40), default="landing")
+    creado_en = Column(DateTime, default=datetime.utcnow)
+    notificado_en = Column(DateTime, nullable=True)

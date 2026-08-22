@@ -1,19 +1,23 @@
+import os
+import uuid
 from typing import Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from ..database import get_db
 from ..models import (
     Pregunta, Respuesta, Diagnostico, DiagPregunta,
     Usuario, Subtema, Componente, TipoDiagnostico,
-    ResultadoDiag, Plan,
+    ResultadoDiag, Plan, Terminos, Formula, Configuracion,
 )
 from ..schemas import (
     PreguntaAdminIn, PreguntaAdminUpdate,
     DiagnosticoAdminIn, DiagnosticoAdminUpdate,
     SubtemaAdminIn, SubtemaAdminUpdate,
     TipoDiagnosticoIn,
+    FormulaAdminIn, FormulaAdminUpdate, MostrarFormularioUpdate,
+    ConfiguracionUpdate,
 )
 from ..core.security import get_current_admin
 
@@ -27,7 +31,8 @@ def list_preguntas(
     subtema_id: Optional[int] = None,
     nivel: Optional[str] = None,
     activo: Optional[bool] = None,
-    limit: int = Query(50, le=200),
+    busqueda: Optional[str] = None,
+    limit: int = Query(25, le=200),
     offset: int = 0,
     _admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
@@ -39,6 +44,10 @@ def list_preguntas(
         q = q.filter(Pregunta.nivel == nivel)
     if activo is not None:
         q = q.filter(Pregunta.activo == activo)
+    if busqueda:
+        term = f"%{busqueda}%"
+        from sqlalchemy import or_
+        q = q.filter(or_(Pregunta.enunciado.ilike(term), Pregunta.codigo.ilike(term)))
     total = q.count()
     preguntas = q.offset(offset).limit(limit).all()
     return {
@@ -48,6 +57,8 @@ def list_preguntas(
                 "id": p.id,
                 "codigo": p.codigo,
                 "enunciado": p.enunciado[:80] + "..." if len(p.enunciado) > 80 else p.enunciado,
+                "imagen_url": p.imagen_url,
+                "tipo": p.tipo_pregunta.nombre if p.tipo_pregunta and p.tipo_pregunta.nombre else "opcion_multiple",
                 "subtema": p.subtema.nombre if p.subtema else None,
                 "subtema_id": p.subtema_id,
                 "nivel": p.nivel,
@@ -72,7 +83,11 @@ def crear_pregunta(
     if db.query(Pregunta).filter(Pregunta.codigo == body.codigo).first():
         raise HTTPException(status_code=409, detail="Ya existe una pregunta con ese código")
     correctas = [r for r in body.respuestas if r.es_correcta]
-    if len(correctas) != 1:
+    if body.tipo_pregunta_id == 2:
+        # Respuesta escrita: todas las filas son respuestas aceptadas
+        if not body.respuestas or not all((r.texto or "").strip() for r in body.respuestas):
+            raise HTTPException(status_code=400, detail="Agrega al menos una respuesta aceptada (sin textos vacíos)")
+    elif len(correctas) != 1:
         raise HTTPException(status_code=400, detail="Debe haber exactamente una respuesta correcta")
 
     p = Pregunta(
@@ -80,15 +95,17 @@ def crear_pregunta(
         tipo_pregunta_id=body.tipo_pregunta_id,
         codigo=body.codigo,
         enunciado=body.enunciado,
+        imagen_url=body.imagen_url or None,
         nivel=body.nivel,
     )
     db.add(p)
     db.flush()
+    es_escrita = body.tipo_pregunta_id == 2
     for r in body.respuestas:
         db.add(Respuesta(
             pregunta_id=p.id,
             texto=r.texto,
-            es_correcta=r.es_correcta,
+            es_correcta=True if es_escrita else r.es_correcta,
             orden=r.orden,
             explicacion=r.explicacion,
         ))
@@ -106,8 +123,15 @@ def editar_pregunta(
     p = db.query(Pregunta).filter(Pregunta.id == pregunta_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Pregunta no encontrada")
+    if body.codigo is not None and body.codigo.strip():
+        existing = db.query(Pregunta).filter(Pregunta.codigo == body.codigo.strip(), Pregunta.id != pregunta_id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"El código '{body.codigo}' ya está en uso")
+        p.codigo = body.codigo.strip().upper()
     if body.enunciado is not None:
         p.enunciado = body.enunciado
+    if body.imagen_url is not None:
+        p.imagen_url = body.imagen_url or None
     if body.nivel is not None:
         p.nivel = body.nivel
     if body.activo is not None:
@@ -204,6 +228,8 @@ def list_diagnosticos(_admin=Depends(get_current_admin), db: Session = Depends(g
             "version": d.version,
             "tipo": d.tipo_diagnostico.nombre if d.tipo_diagnostico else None,
             "activo": d.activo,
+            "tiempo_limite_minutos": d.tiempo_limite_minutos,
+            "instrucciones": d.instrucciones,
             "total_preguntas": len(d.preguntas),
             "veces_completado": db.query(ResultadoDiag).filter(
                 ResultadoDiag.diagnostico_id == d.id,
@@ -224,6 +250,8 @@ def crear_diagnostico(
         tipo_diagnostico_id=body.tipo_diagnostico_id,
         nombre=body.nombre,
         version=body.version,
+        tiempo_limite_minutos=body.tiempo_limite_minutos,
+        instrucciones=body.instrucciones,
     )
     db.add(d)
     db.flush()
@@ -249,10 +277,196 @@ def editar_diagnostico(
         d.version = body.version
     if body.activo is not None:
         d.activo = body.activo
+    if "tiempo_limite_minutos" in body.model_fields_set:
+        # None explícito ⇒ quitar el límite; entero ⇒ establecerlo
+        d.tiempo_limite_minutos = body.tiempo_limite_minutos or None
+    if "instrucciones" in body.model_fields_set:
+        d.instrucciones = (body.instrucciones or "").strip() or None
     if body.pregunta_ids is not None:
         db.query(DiagPregunta).filter(DiagPregunta.diagnostico_id == diag_id).delete()
         for i, pid in enumerate(body.pregunta_ids):
             db.add(DiagPregunta(diagnostico_id=diag_id, pregunta_id=pid, orden=i))
+    db.commit()
+    return {"ok": True}
+
+
+# ── Preguntas de un diagnóstico (gestión individual) ─────────────────────────
+
+@router.get("/diagnosticos/{diag_id}/preguntas")
+def get_preguntas_diagnostico(
+    diag_id: int,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    d = db.query(Diagnostico).filter(Diagnostico.id == diag_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    items = sorted(d.preguntas, key=lambda x: x.orden)
+    return [
+        {
+            "id": dp.pregunta.id,
+            "codigo": dp.pregunta.codigo,
+            "enunciado": dp.pregunta.enunciado[:100] + "..." if len(dp.pregunta.enunciado) > 100 else dp.pregunta.enunciado,
+            "subtema": dp.pregunta.subtema.nombre if dp.pregunta.subtema else None,
+            "nivel": dp.pregunta.nivel,
+            "imagen_url": dp.pregunta.imagen_url,
+            "orden": dp.orden,
+            "mostrar_formulario": bool(dp.mostrar_formulario),
+        }
+        for dp in items
+    ]
+
+
+@router.post("/diagnosticos/{diag_id}/preguntas/{pregunta_id}", status_code=201)
+def agregar_pregunta_diagnostico(
+    diag_id: int,
+    pregunta_id: int,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    d = db.query(Diagnostico).filter(Diagnostico.id == diag_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    p = db.query(Pregunta).filter(Pregunta.id == pregunta_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Pregunta no encontrada")
+    ya_existe = db.query(DiagPregunta).filter(
+        DiagPregunta.diagnostico_id == diag_id,
+        DiagPregunta.pregunta_id == pregunta_id,
+    ).first()
+    if ya_existe:
+        raise HTTPException(status_code=409, detail="La pregunta ya está en este diagnóstico")
+    max_orden = db.query(func.max(DiagPregunta.orden)).filter(DiagPregunta.diagnostico_id == diag_id).scalar() or -1
+    db.add(DiagPregunta(diagnostico_id=diag_id, pregunta_id=pregunta_id, orden=max_orden + 1))
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/diagnosticos/{diag_id}/preguntas/{pregunta_id}")
+def quitar_pregunta_diagnostico(
+    diag_id: int,
+    pregunta_id: int,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    dp = db.query(DiagPregunta).filter(
+        DiagPregunta.diagnostico_id == diag_id,
+        DiagPregunta.pregunta_id == pregunta_id,
+    ).first()
+    if not dp:
+        raise HTTPException(status_code=404, detail="Pregunta no está en este diagnóstico")
+    db.delete(dp)
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/diagnosticos/{diag_id}/preguntas/{pregunta_id}/formulario")
+def toggle_formulario_pregunta(
+    diag_id: int,
+    pregunta_id: int,
+    body: MostrarFormularioUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    dp = db.query(DiagPregunta).filter(
+        DiagPregunta.diagnostico_id == diag_id,
+        DiagPregunta.pregunta_id == pregunta_id,
+    ).first()
+    if not dp:
+        raise HTTPException(status_code=404, detail="Pregunta no está en este diagnóstico")
+    dp.mostrar_formulario = body.mostrar_formulario
+    db.commit()
+    return {"ok": True, "mostrar_formulario": dp.mostrar_formulario}
+
+
+# ── Formulario (fórmulas por diagnóstico) ─────────────────────────────────────
+
+def _formula_out(f: Formula):
+    return {
+        "id": f.id,
+        "diagnostico_id": f.diagnostico_id,
+        "nombre": f.nombre,
+        "contenido": f.contenido,
+        "imagen_url": f.imagen_url,
+        "tip": f.tip,
+        "orden": f.orden,
+        "activo": f.activo,
+    }
+
+
+@router.get("/diagnosticos/{diag_id}/formulas")
+def list_formulas(diag_id: int, _admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    formulas = (
+        db.query(Formula)
+        .filter(Formula.diagnostico_id == diag_id)
+        .order_by(Formula.orden, Formula.id)
+        .all()
+    )
+    return [_formula_out(f) for f in formulas]
+
+
+@router.post("/diagnosticos/{diag_id}/formulas", status_code=201)
+def crear_formula(
+    diag_id: int,
+    body: FormulaAdminIn,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    d = db.query(Diagnostico).filter(Diagnostico.id == diag_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    if not body.nombre.strip():
+        raise HTTPException(status_code=400, detail="El nombre de la fórmula es requerido")
+    if not (body.contenido and body.contenido.strip()) and not body.imagen_url:
+        raise HTTPException(status_code=400, detail="La fórmula debe tener contenido de texto o imagen")
+    f = Formula(
+        diagnostico_id=diag_id,
+        nombre=body.nombre.strip(),
+        contenido=body.contenido,
+        imagen_url=body.imagen_url,
+        tip=body.tip,
+        orden=body.orden,
+    )
+    db.add(f)
+    db.commit()
+    db.refresh(f)
+    return _formula_out(f)
+
+
+@router.put("/formulas/{formula_id}")
+def editar_formula(
+    formula_id: int,
+    body: FormulaAdminUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    f = db.query(Formula).filter(Formula.id == formula_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Fórmula no encontrada")
+    if body.nombre is not None:
+        f.nombre = body.nombre.strip()
+    if "contenido" in body.model_fields_set:
+        f.contenido = body.contenido
+    if "imagen_url" in body.model_fields_set:
+        f.imagen_url = body.imagen_url or None
+    if "tip" in body.model_fields_set:
+        f.tip = body.tip
+    if body.orden is not None:
+        f.orden = body.orden
+    if body.activo is not None:
+        f.activo = body.activo
+    if not (f.contenido and f.contenido.strip()) and not f.imagen_url:
+        raise HTTPException(status_code=400, detail="La fórmula debe tener contenido de texto o imagen")
+    db.commit()
+    return _formula_out(f)
+
+
+@router.delete("/formulas/{formula_id}")
+def eliminar_formula(formula_id: int, _admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    f = db.query(Formula).filter(Formula.id == formula_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Fórmula no encontrada")
+    db.delete(f)
     db.commit()
     return {"ok": True}
 
@@ -389,3 +603,116 @@ def dashboard(_admin=Depends(get_current_admin), db: Session = Depends(get_db)):
         "preguntas_activas": preguntas_activas,
         "total_completados": total_completados,
     }
+
+
+# ── Términos y Condiciones ────────────────────────────────────────────────────
+
+@router.get("/terminos")
+def get_terminos_admin(_admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    t = db.query(Terminos).filter(Terminos.id == 1).first()
+    if not t:
+        raise HTTPException(404, "Términos no encontrados")
+    return {"contenido": t.contenido, "fecha_modificacion": t.fecha_modificacion, "version": t.version}
+
+
+@router.put("/terminos")
+def update_terminos(body: dict, _admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    import json
+    contenido = body.get("contenido")
+    version   = body.get("version", "1.0")
+    if not contenido:
+        raise HTTPException(400, "contenido es requerido")
+    # Validate JSON structure
+    try:
+        parsed = json.loads(contenido) if isinstance(contenido, str) else contenido
+        if not isinstance(parsed, list):
+            raise ValueError
+    except Exception:
+        raise HTTPException(400, "contenido debe ser un array JSON de secciones")
+
+    t = db.query(Terminos).filter(Terminos.id == 1).first()
+    if t:
+        t.contenido = json.dumps(parsed, ensure_ascii=False)
+        t.fecha_modificacion = datetime.utcnow()
+        t.version = version
+    else:
+        t = Terminos(id=1, contenido=json.dumps(parsed, ensure_ascii=False), version=version)
+        db.add(t)
+    db.commit()
+    db.refresh(t)
+    return {"ok": True, "fecha_modificacion": t.fecha_modificacion, "version": t.version}
+
+
+# ── Upload de imágenes ─────────────────────────────────────────────────────────
+
+ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
+
+@router.post("/upload-imagen")
+async def upload_imagen(
+    file: UploadFile = File(...),
+    _admin=Depends(get_current_admin),
+):
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(400, "Solo se permiten imágenes jpg, png, gif o webp")
+
+    bucket = os.getenv("IMAGES_BUCKET")
+    region = os.getenv("AWS_REGION", "us-east-1")
+    if not bucket:
+        raise HTTPException(500, "IMAGES_BUCKET no configurado en el servidor")
+
+    try:
+        import boto3
+        content = await file.read()
+        if len(content) > 8 * 1024 * 1024:
+            raise HTTPException(400, "La imagen no puede superar 8 MB")
+        ext = EXT_MAP.get(file.content_type, "jpg")
+        key = f"images/{uuid.uuid4()}.{ext}"
+        s3 = boto3.client("s3", region_name=region)
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content,
+            ContentType=file.content_type,
+            CacheControl="max-age=31536000",
+        )
+        url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+        return {"url": url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error al subir imagen: {str(e)}")
+
+
+# ── Configuración global (clave/valor) ────────────────────────────────────────
+
+@router.get("/configuracion")
+def list_configuracion(_admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    from .planes import TASA_USD_DEFAULT
+    items = {c.clave: c.valor for c in db.query(Configuracion).all()}
+    items.setdefault("tasa_usd", str(TASA_USD_DEFAULT))
+    return items
+
+
+@router.put("/configuracion/{clave}")
+def set_configuracion(
+    clave: str,
+    body: ConfiguracionUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if clave == "tasa_usd":
+        try:
+            tasa = float(body.valor)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="La tasa debe ser un número")
+        if tasa <= 0:
+            raise HTTPException(status_code=400, detail="La tasa debe ser mayor a 0")
+    cfg = db.query(Configuracion).filter(Configuracion.clave == clave).first()
+    if cfg:
+        cfg.valor = body.valor
+    else:
+        cfg = Configuracion(clave=clave, valor=body.valor)
+        db.add(cfg)
+    db.commit()
+    return {"clave": clave, "valor": body.valor}
