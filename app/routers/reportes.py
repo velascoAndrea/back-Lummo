@@ -47,14 +47,20 @@ def get_reporte(token: str, db: Session = Depends(get_db)):
         resp_correcta = next((r for r in pregunta.respuestas if r.es_correcta), None)
         resp_sel = rd.respuesta
 
-        opcion_sel_letra = chr(65 + resp_sel.orden) if resp_sel else "?"
-        opcion_cor_letra = chr(65 + resp_correcta.orden) if resp_correcta else "?"
+        es_escrita = rd.respuesta_id is None and rd.respuesta_texto is not None
+        if es_escrita:
+            # Respuesta escrita: mostrar lo que escribió y el texto correcto
+            opcion_sel = rd.respuesta_texto
+            opcion_cor = resp_correcta.texto if resp_correcta else "?"
+        else:
+            opcion_sel = chr(65 + resp_sel.orden) if resp_sel and resp_sel.orden is not None else "?"
+            opcion_cor = chr(65 + resp_correcta.orden) if resp_correcta and resp_correcta.orden is not None else "?"
 
         resumen.append(ResumenPreguntaOut(
             enunciado=pregunta.enunciado,
-            opcion_seleccionada=opcion_sel_letra,
+            opcion_seleccionada=opcion_sel,
             es_correcta=rd.es_correcta,
-            opcion_correcta=opcion_cor_letra,
+            opcion_correcta=opcion_cor,
             explicacion=resp_correcta.explicacion or "" if resp_correcta else "",
         ))
 

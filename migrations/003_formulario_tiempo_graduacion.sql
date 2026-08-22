@@ -7,6 +7,23 @@ ALTER TABLE diagnostico ADD COLUMN IF NOT EXISTS instrucciones TEXT;
 ALTER TABLE diag_pregunta ADD COLUMN IF NOT EXISTS mostrar_formulario BOOLEAN DEFAULT FALSE;
 ALTER TABLE resultado_diag ADD COLUMN IF NOT EXISTS duracion_segundos INTEGER;
 
+-- Tipo de pregunta "respuesta escrita" (input) + texto escrito por el estudiante
+INSERT INTO tipo_pregunta (id, nombre) SELECT 2, 'respuesta_escrita'
+  WHERE NOT EXISTS (SELECT 1 FROM tipo_pregunta WHERE id = 2);
+SELECT setval('tipo_pregunta_id_seq', GREATEST((SELECT MAX(id) FROM tipo_pregunta), 2));
+ALTER TABLE respuesta_diag ADD COLUMN IF NOT EXISTS respuesta_texto TEXT;
+
+-- Fecha de nacimiento del estudiante
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS fecha_nacimiento DATE;
+
+-- Configuración global de la plataforma (clave/valor) + tasa de cambio USD por defecto
+CREATE TABLE IF NOT EXISTS configuracion (
+    clave VARCHAR(50) PRIMARY KEY,
+    valor VARCHAR(200) NOT NULL
+);
+INSERT INTO configuracion (clave, valor) VALUES ('tasa_usd', '7.75')
+  ON CONFLICT (clave) DO NOTHING;
+
 -- Seed de instrucciones PAA (solo si el diagnóstico aún no tiene instrucciones)
 UPDATE diagnostico SET instrucciones =
 'MATEMÁTICA

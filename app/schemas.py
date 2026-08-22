@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel, EmailStr
 
 
@@ -29,6 +29,7 @@ class IniciarDiagnosticoRequest(BaseModel):
     diagnostico_id: int
     graduado: Optional[bool] = None
     anio_graduacion: Optional[int] = None
+    fecha_nacimiento: Optional[date] = None
     grado: Optional[str] = None
     sector: Optional[str] = None
 
@@ -64,6 +65,7 @@ class PreguntaOut(BaseModel):
     enunciado: str
     imagen_url: Optional[str] = None
     mostrar_formulario: bool = False
+    tipo: str = "opcion_multiple"   # opcion_multiple | respuesta_escrita
     opciones: List[OpcionOut]
 
     class Config:
@@ -84,7 +86,8 @@ class FormulaOut(BaseModel):
 
 class RespuestaResumen(BaseModel):
     pregunta_id: int
-    respuesta_id: int
+    respuesta_id: Optional[int] = None
+    respuesta_texto: Optional[str] = None   # preguntas de respuesta escrita
     es_correcta: bool
     respuesta_correcta_id: Optional[int] = None
     respuesta_correcta_letra: Optional[str] = None
@@ -105,7 +108,8 @@ class PreguntasResponse(BaseModel):
 
 class ResponderRequest(BaseModel):
     pregunta_id: int
-    respuesta_id: int
+    respuesta_id: Optional[int] = None      # opción múltiple
+    respuesta_texto: Optional[str] = None   # respuesta escrita
 
 
 class ResponderResponse(BaseModel):
@@ -239,6 +243,10 @@ class FormulaAdminUpdate(BaseModel):
 
 class MostrarFormularioUpdate(BaseModel):
     mostrar_formulario: bool
+
+
+class ConfiguracionUpdate(BaseModel):
+    valor: str
 
 
 class SubtemaAdminIn(BaseModel):

@@ -9,7 +9,7 @@ from ..database import get_db
 from ..models import (
     Pregunta, Respuesta, Diagnostico, DiagPregunta,
     Usuario, Subtema, Componente, TipoDiagnostico,
-    ResultadoDiag, Plan, Terminos, Formula,
+    ResultadoDiag, Plan, Terminos, Formula, Configuracion,
 )
 from ..schemas import (
     PreguntaAdminIn, PreguntaAdminUpdate,
@@ -17,6 +17,7 @@ from ..schemas import (
     SubtemaAdminIn, SubtemaAdminUpdate,
     TipoDiagnosticoIn,
     FormulaAdminIn, FormulaAdminUpdate, MostrarFormularioUpdate,
+    ConfiguracionUpdate,
 )
 from ..core.security import get_current_admin
 
@@ -57,6 +58,7 @@ def list_preguntas(
                 "codigo": p.codigo,
                 "enunciado": p.enunciado[:80] + "..." if len(p.enunciado) > 80 else p.enunciado,
                 "imagen_url": p.imagen_url,
+                "tipo": p.tipo_pregunta.nombre if p.tipo_pregunta and p.tipo_pregunta.nombre else "opcion_multiple",
                 "subtema": p.subtema.nombre if p.subtema else None,
                 "subtema_id": p.subtema_id,
                 "nivel": p.nivel,
@@ -81,7 +83,11 @@ def crear_pregunta(
     if db.query(Pregunta).filter(Pregunta.codigo == body.codigo).first():
         raise HTTPException(status_code=409, detail="Ya existe una pregunta con ese código")
     correctas = [r for r in body.respuestas if r.es_correcta]
-    if len(correctas) != 1:
+    if body.tipo_pregunta_id == 2:
+        # Respuesta escrita: todas las filas son respuestas aceptadas
+        if not body.respuestas or not all((r.texto or "").strip() for r in body.respuestas):
+            raise HTTPException(status_code=400, detail="Agrega al menos una respuesta aceptada (sin textos vacíos)")
+    elif len(correctas) != 1:
         raise HTTPException(status_code=400, detail="Debe haber exactamente una respuesta correcta")
 
     p = Pregunta(
@@ -94,11 +100,12 @@ def crear_pregunta(
     )
     db.add(p)
     db.flush()
+    es_escrita = body.tipo_pregunta_id == 2
     for r in body.respuestas:
         db.add(Respuesta(
             pregunta_id=p.id,
             texto=r.texto,
-            es_correcta=r.es_correcta,
+            es_correcta=True if es_escrita else r.es_correcta,
             orden=r.orden,
             explicacion=r.explicacion,
         ))
@@ -675,3 +682,37 @@ async def upload_imagen(
         raise
     except Exception as e:
         raise HTTPException(500, f"Error al subir imagen: {str(e)}")
+
+
+# ── Configuración global (clave/valor) ────────────────────────────────────────
+
+@router.get("/configuracion")
+def list_configuracion(_admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    from .planes import TASA_USD_DEFAULT
+    items = {c.clave: c.valor for c in db.query(Configuracion).all()}
+    items.setdefault("tasa_usd", str(TASA_USD_DEFAULT))
+    return items
+
+
+@router.put("/configuracion/{clave}")
+def set_configuracion(
+    clave: str,
+    body: ConfiguracionUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if clave == "tasa_usd":
+        try:
+            tasa = float(body.valor)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="La tasa debe ser un número")
+        if tasa <= 0:
+            raise HTTPException(status_code=400, detail="La tasa debe ser mayor a 0")
+    cfg = db.query(Configuracion).filter(Configuracion.clave == clave).first()
+    if cfg:
+        cfg.valor = body.valor
+    else:
+        cfg = Configuracion(clave=clave, valor=body.valor)
+        db.add(cfg)
+    db.commit()
+    return {"clave": clave, "valor": body.valor}

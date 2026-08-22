@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Float,
-    DateTime, ForeignKey
+    DateTime, Date, ForeignKey
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -142,6 +142,7 @@ class Usuario(Base):
     activo = Column(Boolean, default=True)
     graduado = Column(Boolean, nullable=True)
     anio_graduacion = Column(Integer, nullable=True)
+    fecha_nacimiento = Column(Date, nullable=True)
     grado = Column(String(50), nullable=True)
     sector = Column(String(20), nullable=True)   # "publico" | "privado"
     rol = relationship("Rol")
@@ -181,6 +182,7 @@ class RespuestaDiag(Base):
     resultado_diag_id = Column(Integer, ForeignKey("resultado_diag.id"))
     pregunta_id = Column(Integer, ForeignKey("pregunta.id"))
     respuesta_id = Column(Integer, ForeignKey("respuesta.id"), nullable=True)
+    respuesta_texto = Column(Text, nullable=True)   # lo que escribió (preguntas de respuesta escrita)
     es_correcta = Column(Boolean)
     tiempo_segundos = Column(Integer, nullable=True)
     resultado = relationship("ResultadoDiag", back_populates="respuestas")
@@ -221,6 +223,13 @@ class Terminos(Base):
     version = Column(String(20), default="1.0")
 
 
+class Configuracion(Base):
+    """Ajustes globales de la plataforma editables desde el admin (clave/valor)."""
+    __tablename__ = "configuracion"
+    clave = Column(String(50), primary_key=True)
+    valor = Column(String(200), nullable=False)
+
+
 class Suscripcion(Base):
     __tablename__ = "suscripcion"
     id = Column(Integer, primary_key=True)
@@ -234,3 +243,18 @@ class Suscripcion(Base):
     renovacion_automatica = Column(Boolean, default=False)
     usuario = relationship("Usuario")
     plan = relationship("Plan")
+
+
+class ListaEspera(Base):
+    """
+    Correos capturados por la landing de soylummo.com antes de que Lummo Test abra.
+
+    El correo es único: apuntarse dos veces no crea dos filas ni es un error para
+    quien lo hace — el router responde 409 y la landing lo trata como éxito.
+    """
+    __tablename__ = "lista_espera"
+    id = Column(Integer, primary_key=True)
+    correo = Column(String(160), unique=True, nullable=False, index=True)
+    origen = Column(String(40), default="landing")
+    creado_en = Column(DateTime, default=datetime.utcnow)
+    notificado_en = Column(DateTime, nullable=True)

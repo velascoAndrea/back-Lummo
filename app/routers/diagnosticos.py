@@ -32,6 +32,16 @@ def _nivel_from_puntaje(pct: float) -> str:
     return "alto"
 
 
+def _tipo_pregunta(p: Pregunta) -> str:
+    return p.tipo_pregunta.nombre if p.tipo_pregunta and p.tipo_pregunta.nombre else "opcion_multiple"
+
+
+def _normalizar_respuesta(texto: str) -> str:
+    """Normaliza una respuesta escrita para compararla: sin espacios,
+    minúsculas, coma decimal → punto. '5/7', ' 5 / 7 ' y '5/ 7' son iguales."""
+    return (texto or "").strip().lower().replace(" ", "").replace(",", ".")
+
+
 @router.get("/catalogo")
 def get_catalogo(db: Session = Depends(get_db)):
     """Devuelve todos los TipoDiagnostico activos con sus Diagnosticos disponibles."""
@@ -52,6 +62,7 @@ def get_catalogo(db: Session = Depends(get_db)):
                 "nombre": d.nombre,
                 "version": d.version,
                 "total_preguntas": total_q,
+                "tiempo_limite_minutos": d.tiempo_limite_minutos,
             })
         if diag_list:
             result.append({
@@ -104,6 +115,7 @@ def iniciar_diagnostico(req: IniciarDiagnosticoRequest, db: Session = Depends(ge
             rol_id=rol_est.id if rol_est else None,
             graduado=req.graduado,
             anio_graduacion=req.anio_graduacion if req.graduado else None,
+            fecha_nacimiento=req.fecha_nacimiento,
             grado=req.grado,
             sector=req.sector,
         )
@@ -122,6 +134,8 @@ def iniciar_diagnostico(req: IniciarDiagnosticoRequest, db: Session = Depends(ge
                 usuario.grado = req.grado
         if req.sector:
             usuario.sector = req.sector
+        if req.fecha_nacimiento:
+            usuario.fecha_nacimiento = req.fecha_nacimiento
 
     diagnostico = db.query(Diagnostico).filter(
         Diagnostico.id == req.diagnostico_id,
@@ -192,6 +206,7 @@ def get_preguntas(
         item = RespuestaResumen(
             pregunta_id=rd.pregunta_id,
             respuesta_id=rd.respuesta_id,
+            respuesta_texto=rd.respuesta_texto,
             es_correcta=rd.es_correcta,
         )
         if not rd.es_correcta:
@@ -201,7 +216,7 @@ def get_preguntas(
             ).first()
             if correcta:
                 item.respuesta_correcta_id    = correcta.id
-                item.respuesta_correcta_letra = chr(65 + correcta.orden)
+                item.respuesta_correcta_letra = chr(65 + correcta.orden) if correcta.orden is not None else None
                 item.respuesta_correcta_texto = correcta.texto
                 item.explicacion              = correcta.explicacion
         respuestas_dadas.append(item)
@@ -209,13 +224,19 @@ def get_preguntas(
     preguntas_out = []
     for dp in diag_preguntas:
         p = dp.pregunta
-        opciones = [
-            OpcionOut(id=r.id, texto=r.texto, orden=r.orden)
-            for r in sorted(p.respuestas, key=lambda x: x.orden)
-        ]
+        tipo = _tipo_pregunta(p)
+        if tipo == "respuesta_escrita":
+            # No enviar las respuestas aceptadas al cliente
+            opciones = []
+        else:
+            opciones = [
+                OpcionOut(id=r.id, texto=r.texto, orden=r.orden)
+                for r in sorted(p.respuestas, key=lambda x: (x.orden is None, x.orden))
+            ]
         preguntas_out.append(PreguntaOut(
             id=p.id, enunciado=p.enunciado, imagen_url=p.imagen_url,
             mostrar_formulario=bool(dp.mostrar_formulario),
+            tipo=tipo,
             opciones=opciones,
         ))
 
@@ -266,18 +287,41 @@ def responder_pregunta(
     if ya_existe:
         raise HTTPException(status_code=409, detail="Pregunta ya respondida")
 
-    respuesta_sel = db.query(Respuesta).filter(Respuesta.id == req.respuesta_id).first()
-    if not respuesta_sel:
-        raise HTTPException(status_code=404, detail="Respuesta no encontrada")
+    pregunta = db.query(Pregunta).filter(Pregunta.id == req.pregunta_id).first()
+    if not pregunta:
+        raise HTTPException(status_code=404, detail="Pregunta no encontrada")
 
-    es_correcta = respuesta_sel.es_correcta
+    if _tipo_pregunta(pregunta) == "respuesta_escrita":
+        # ── Respuesta escrita: comparar contra las respuestas aceptadas ──
+        if not (req.respuesta_texto and req.respuesta_texto.strip()):
+            raise HTTPException(status_code=400, detail="Escribe tu respuesta antes de confirmar")
+        aceptadas = [r for r in pregunta.respuestas if r.es_correcta]
+        if not aceptadas:
+            raise HTTPException(status_code=500, detail="La pregunta no tiene respuesta configurada")
+        normalizada = _normalizar_respuesta(req.respuesta_texto)
+        es_correcta = normalizada in {_normalizar_respuesta(r.texto) for r in aceptadas}
+        resp_diag = RespuestaDiag(
+            resultado_diag_id=resultado_id,
+            pregunta_id=req.pregunta_id,
+            respuesta_id=None,
+            respuesta_texto=req.respuesta_texto.strip(),
+            es_correcta=es_correcta,
+        )
+    else:
+        # ── Opción múltiple ──
+        if not req.respuesta_id:
+            raise HTTPException(status_code=400, detail="Selecciona una opción antes de confirmar")
+        respuesta_sel = db.query(Respuesta).filter(Respuesta.id == req.respuesta_id).first()
+        if not respuesta_sel or respuesta_sel.pregunta_id != pregunta.id:
+            raise HTTPException(status_code=404, detail="Respuesta no encontrada")
+        es_correcta = respuesta_sel.es_correcta
+        resp_diag = RespuestaDiag(
+            resultado_diag_id=resultado_id,
+            pregunta_id=req.pregunta_id,
+            respuesta_id=req.respuesta_id,
+            es_correcta=es_correcta,
+        )
 
-    resp_diag = RespuestaDiag(
-        resultado_diag_id=resultado_id,
-        pregunta_id=req.pregunta_id,
-        respuesta_id=req.respuesta_id,
-        es_correcta=es_correcta,
-    )
     db.add(resp_diag)
     db.commit()
 
@@ -309,7 +353,7 @@ def responder_pregunta(
         if resp_correcta:
             explicacion = resp_correcta.explicacion
             correcta_texto = resp_correcta.texto
-            correcta_letra = chr(65 + resp_correcta.orden)
+            correcta_letra = chr(65 + resp_correcta.orden) if resp_correcta.orden is not None and _tipo_pregunta(pregunta) != "respuesta_escrita" else None
 
     return ResponderResponse(
         es_correcta=es_correcta,
