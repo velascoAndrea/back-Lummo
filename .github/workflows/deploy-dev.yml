@@ -50,14 +50,19 @@ jobs:
             --region ${{ secrets.AWS_REGION }}
 
       - name: Update Lambda environment
+        # JSON en vez de la sintaxis abreviada "Variables={A=1,B=2}": esa separa por
+        # comas y no admite una lista de orígenes. Sin dev.soylummo.com el login
+        # falla por CORS ("Failed to fetch").
+        env:
+          DATABASE_URL: ${{ secrets.DEV_DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          # La landing (soylummo.com y www) también usa la API de dev para la lista de espera
+          ALLOWED_ORIGINS: https://dev.soylummo.com,https://soylummo.com,https://www.soylummo.com,https://${{ secrets.DEV_AMPLIFY_DOMAIN }}
+          IMAGES_BUCKET: ${{ secrets.IMAGES_BUCKET }}
         run: |
+          python3 -c 'import json, os; json.dump({"Variables": {k: os.environ[k] for k in ("DATABASE_URL", "SECRET_KEY", "ALLOWED_ORIGINS", "IMAGES_BUCKET")} | {"ENVIRONMENT": "dev"}}, open("lambda-env.json", "w"))'
           aws lambda update-function-configuration \
             --function-name ${{ secrets.DEV_LAMBDA_FUNCTION }} \
-            --environment "Variables={
-              DATABASE_URL=${{ secrets.DEV_DATABASE_URL }},
-              SECRET_KEY=${{ secrets.SECRET_KEY }},
-              ALLOWED_ORIGINS=https://${{ secrets.DEV_AMPLIFY_DOMAIN }},
-              ENVIRONMENT=dev,
-              IMAGES_BUCKET=${{ secrets.IMAGES_BUCKET }}
-            }" \
+            --environment file://lambda-env.json \
             --region ${{ secrets.AWS_REGION }}
+          rm -f lambda-env.json
