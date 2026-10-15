@@ -144,9 +144,20 @@ def resumen(
     duraciones = [r.duracion_segundos for r in completados if r.duracion_segundos]
     puntajes = [r.puntaje_global for r in completados if r.puntaje_global is not None]
 
+    def _en_rango(dt):
+        if dt is None:
+            return False
+        if desde and dt.date() < desde:
+            return False
+        if hasta and dt.date() > hasta:
+            return False
+        return True
+
     return {
         "kpis": {
             "estudiantes": len(est_ids),
+            # Registrados dentro del periodo (para comparar contra el periodo anterior)
+            "estudiantes_nuevos": sum(1 for u in estudiantes if _en_rango(u.creado_en)),
             "intentos_activos": len(con_respuestas),
             "intentos_vacios": len(intentos) - len(con_respuestas),
             "completados": len(completados),
