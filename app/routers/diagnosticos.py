@@ -1,4 +1,3 @@
-import random
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -20,6 +19,7 @@ from ..core.security import (
     generate_report_token, get_sesion_token,
 )
 from ..core.email import send_results_email
+from ..core.seleccion import preguntas_de_sesion, total_efectivo
 
 router = APIRouter(prefix="/diagnosticos", tags=["diagnosticos"])
 
@@ -56,7 +56,7 @@ def get_catalogo(db: Session = Depends(get_db)):
         )
         diag_list = []
         for d in diagnosticos:
-            total_q = db.query(DiagPregunta).filter(DiagPregunta.diagnostico_id == d.id).count()
+            total_q = total_efectivo(db, d.id)
             diag_list.append({
                 "id": d.id,
                 "nombre": d.nombre,
@@ -144,18 +144,33 @@ def iniciar_diagnostico(req: IniciarDiagnosticoRequest, db: Session = Depends(ge
     if not diagnostico:
         raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
 
-    total_preguntas = db.query(DiagPregunta).filter(
-        DiagPregunta.diagnostico_id == diagnostico.id
-    ).count()
+    total_preguntas = total_efectivo(db, diagnostico.id)
 
-    resultado = ResultadoDiag(
-        usuario_id=usuario.id,
-        diagnostico_id=diagnostico.id,
-        estado="en_progreso",
-    )
-    db.add(resultado)
-    db.commit()
-    db.refresh(resultado)
+    # Si ya tiene un intento abierto de este diagnóstico, se retoma en vez de
+    # crear otro (antes cada entrada creaba un intento vacío nuevo).
+    resultado = None
+    if not es_cuenta_nueva:
+        resultado = (
+            db.query(ResultadoDiag)
+            .filter(
+                ResultadoDiag.usuario_id == usuario.id,
+                ResultadoDiag.diagnostico_id == diagnostico.id,
+                ResultadoDiag.estado == "en_progreso",
+            )
+            .order_by(ResultadoDiag.id.desc())
+            .first()
+        )
+    if resultado:
+        db.commit()  # guarda los datos demográficos refrescados
+    else:
+        resultado = ResultadoDiag(
+            usuario_id=usuario.id,
+            diagnostico_id=diagnostico.id,
+            estado="en_progreso",
+        )
+        db.add(resultado)
+        db.commit()
+        db.refresh(resultado)
 
     sesion_token = create_access_token(
         {"resultado_id": resultado.id, "usuario_id": usuario.id},
@@ -181,18 +196,10 @@ def get_preguntas(
     if not resultado:
         raise HTTPException(status_code=404, detail="Resultado no encontrado")
 
-    diag_preguntas = (
-        db.query(DiagPregunta)
-        .filter(DiagPregunta.diagnostico_id == resultado.diagnostico_id)
-        .order_by(DiagPregunta.orden)
-        .all()
-    )
-
-    # Shuffle determinístico por sesión: mismo resultado_id ⇒ mismo orden
-    # (el estudiante puede salir y volver sin que cambie el orden), pero cada
-    # intento/estudiante ve un orden distinto.
-    rnd = random.Random(resultado_id)
-    rnd.shuffle(diag_preguntas)
+    # Selección determinística por sesión: mismo resultado_id ⇒ mismas
+    # preguntas y mismo orden (el estudiante puede salir y volver), pero cada
+    # intento/estudiante ve una muestra y un orden distintos.
+    diag_preguntas = preguntas_de_sesion(db, resultado.diagnostico_id, resultado_id)
 
     respondidas_rows = db.query(RespuestaDiag).filter(
         RespuestaDiag.resultado_diag_id == resultado_id
@@ -322,16 +329,15 @@ def responder_pregunta(
             es_correcta=es_correcta,
         )
 
+    if req.tiempo_segundos is not None:
+        # Tiempo que la pregunta estuvo en pantalla; se acota para descartar pestañas olvidadas
+        resp_diag.tiempo_segundos = max(0, min(int(req.tiempo_segundos), 3600))
+
     db.add(resp_diag)
     db.commit()
 
     # Siguiente pregunta
-    diag_preguntas = (
-        db.query(DiagPregunta)
-        .filter(DiagPregunta.diagnostico_id == resultado.diagnostico_id)
-        .order_by(DiagPregunta.orden)
-        .all()
-    )
+    diag_preguntas = preguntas_de_sesion(db, resultado.diagnostico_id, resultado_id)
     pregunta_ids = [dp.pregunta_id for dp in diag_preguntas]
     try:
         idx = pregunta_ids.index(req.pregunta_id)
@@ -378,11 +384,7 @@ def finalizar_diagnostico(
         raise HTTPException(status_code=400, detail="Diagnóstico ya finalizado")
 
     # Cargar todas las respuestas del diagnóstico
-    diag_preguntas = (
-        db.query(DiagPregunta)
-        .filter(DiagPregunta.diagnostico_id == resultado.diagnostico_id)
-        .all()
-    )
+    diag_preguntas = preguntas_de_sesion(db, resultado.diagnostico_id, resultado_id)
     respuestas_diag = (
         db.query(RespuestaDiag)
         .filter(RespuestaDiag.resultado_diag_id == resultado_id)
@@ -423,7 +425,7 @@ def finalizar_diagnostico(
             total=stats["total"],
         ))
 
-    total_correctas = sum(1 for r in respuestas_diag if r.es_correcta)
+    total_correctas = sum(1 for dp in diag_preguntas if (rd := respuestas_map.get(dp.pregunta_id)) and rd.es_correcta)
     total_preguntas = len(diag_preguntas)
     puntaje_global = round((total_correctas / total_preguntas * 100) if total_preguntas > 0 else 0, 1)
     nivel_global = _nivel_from_puntaje(puntaje_global)

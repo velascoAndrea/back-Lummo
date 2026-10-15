@@ -9,17 +9,18 @@ from ..database import get_db
 from ..models import (
     Pregunta, Respuesta, Diagnostico, DiagPregunta,
     Usuario, Subtema, Componente, TipoDiagnostico,
-    ResultadoDiag, Plan, Terminos, Formula, Configuracion,
+    ResultadoDiag, Plan, Terminos, Formula, Configuracion, DiagTema,
 )
 from ..schemas import (
     PreguntaAdminIn, PreguntaAdminUpdate,
     DiagnosticoAdminIn, DiagnosticoAdminUpdate,
     SubtemaAdminIn, SubtemaAdminUpdate,
     TipoDiagnosticoIn,
-    FormulaAdminIn, FormulaAdminUpdate, MostrarFormularioUpdate,
+    FormulaAdminIn, FormulaAdminUpdate, MostrarFormularioUpdate, CantidadTemaUpdate,
     ConfiguracionUpdate,
 )
 from ..core.security import get_current_admin
+from ..core.seleccion import total_efectivo
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -230,7 +231,8 @@ def list_diagnosticos(_admin=Depends(get_current_admin), db: Session = Depends(g
             "activo": d.activo,
             "tiempo_limite_minutos": d.tiempo_limite_minutos,
             "instrucciones": d.instrucciones,
-            "total_preguntas": len(d.preguntas),
+            "total_preguntas": total_efectivo(db, d.id),
+            "total_asignadas": len(d.preguntas),
             "veces_completado": db.query(ResultadoDiag).filter(
                 ResultadoDiag.diagnostico_id == d.id,
                 ResultadoDiag.estado == "completado",
@@ -308,6 +310,7 @@ def get_preguntas_diagnostico(
             "codigo": dp.pregunta.codigo,
             "enunciado": dp.pregunta.enunciado[:100] + "..." if len(dp.pregunta.enunciado) > 100 else dp.pregunta.enunciado,
             "subtema": dp.pregunta.subtema.nombre if dp.pregunta.subtema else None,
+            "subtema_id": dp.pregunta.subtema_id,
             "nivel": dp.pregunta.nivel,
             "imagen_url": dp.pregunta.imagen_url,
             "orden": dp.orden,
@@ -377,6 +380,44 @@ def toggle_formulario_pregunta(
     dp.mostrar_formulario = body.mostrar_formulario
     db.commit()
     return {"ok": True, "mostrar_formulario": dp.mostrar_formulario}
+
+
+@router.get("/diagnosticos/{diag_id}/temas")
+def get_temas_diagnostico(
+    diag_id: int,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Cantidad de preguntas a mostrar por tema. Temas sin fila ⇒ todas."""
+    rows = db.query(DiagTema).filter(DiagTema.diagnostico_id == diag_id).all()
+    return [{"subtema_id": r.subtema_id, "cantidad": r.cantidad} for r in rows]
+
+
+@router.put("/diagnosticos/{diag_id}/temas/{subtema_id}")
+def set_cantidad_tema(
+    diag_id: int,
+    subtema_id: int,
+    body: CantidadTemaUpdate,
+    _admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if not db.query(Diagnostico).filter(Diagnostico.id == diag_id).first():
+        raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    if body.cantidad is not None and body.cantidad < 1:
+        raise HTTPException(status_code=400, detail="La cantidad debe ser al menos 1 (vacío = todas)")
+    row = db.query(DiagTema).filter(
+        DiagTema.diagnostico_id == diag_id,
+        DiagTema.subtema_id == subtema_id,
+    ).first()
+    if body.cantidad is None:
+        if row:
+            db.delete(row)
+    elif row:
+        row.cantidad = body.cantidad
+    else:
+        db.add(DiagTema(diagnostico_id=diag_id, subtema_id=subtema_id, cantidad=body.cantidad))
+    db.commit()
+    return {"ok": True, "subtema_id": subtema_id, "cantidad": body.cantidad}
 
 
 # ── Formulario (fórmulas por diagnóstico) ─────────────────────────────────────

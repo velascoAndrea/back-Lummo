@@ -110,6 +110,7 @@ class ResponderRequest(BaseModel):
     pregunta_id: int
     respuesta_id: Optional[int] = None      # opción múltiple
     respuesta_texto: Optional[str] = None   # respuesta escrita
+    tiempo_segundos: Optional[int] = None   # tiempo en pantalla de la pregunta
 
 
 class ResponderResponse(BaseModel):
@@ -243,6 +244,10 @@ class FormulaAdminUpdate(BaseModel):
 
 class MostrarFormularioUpdate(BaseModel):
     mostrar_formulario: bool
+
+
+class CantidadTemaUpdate(BaseModel):
+    cantidad: Optional[int] = None   # None ⇒ mostrar todas las del tema
 
 
 class ConfiguracionUpdate(BaseModel):

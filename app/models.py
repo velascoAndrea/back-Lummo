@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Float,
-    DateTime, Date, ForeignKey
+    DateTime, Date, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -106,6 +106,18 @@ class DiagPregunta(Base):
     mostrar_formulario = Column(Boolean, default=False)
     diagnostico = relationship("Diagnostico", back_populates="preguntas")
     pregunta = relationship("Pregunta")
+
+
+class DiagTema(Base):
+    """Cuántas preguntas de un tema (subtema) se muestran por intento.
+    Si el tema tiene más preguntas asignadas, se eligen al azar.
+    Sin fila (o cantidad NULL) ⇒ se muestran todas las del tema."""
+    __tablename__ = "diag_tema"
+    __table_args__ = (UniqueConstraint("diagnostico_id", "subtema_id"),)
+    id = Column(Integer, primary_key=True)
+    diagnostico_id = Column(Integer, ForeignKey("diagnostico.id"), nullable=False)
+    subtema_id = Column(Integer, ForeignKey("subtema.id"), nullable=False)
+    cantidad = Column(Integer, nullable=True)
 
 
 class Formula(Base):
