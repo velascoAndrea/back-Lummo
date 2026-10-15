@@ -51,18 +51,38 @@ jobs:
             --region ${{ secrets.AWS_REGION }}
 
       - name: Update Lambda environment
-        # JSON en vez de la sintaxis abreviada "Variables={A=1,B=2}": esa separa por
-        # comas y no admite una lista de orígenes. Los dominios van fijos aquí porque
-        # el secret PROD_AMPLIFY_DOMAIN estaba vacío y dejaba ALLOWED_ORIGINS="https://".
+        # Fusiona con las variables que ya tiene el Lambda en vez de reemplazarlas:
+        # un secret vacío o ausente conserva el valor actual. Importante para
+        # SECRET_KEY: prod tiene la suya propia; usar la de dev cerraría todas
+        # las sesiones. Para cambiarla, crear el secret PROD_SECRET_KEY.
+        # Los orígenes van fijos: PROD_AMPLIFY_DOMAIN estaba vacío y dejaba "https://".
         env:
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          ALLOWED_ORIGINS: https://app.soylummo.com,https://main.d1999tyl6ud7e5.amplifyapp.com
-          IMAGES_BUCKET: ${{ secrets.IMAGES_BUCKET }}
+          FN: ${{ secrets.PROD_LAMBDA_FUNCTION }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          NEW_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          NEW_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+          NEW_IMAGES_BUCKET: ${{ secrets.IMAGES_BUCKET }}
+          NEW_ALLOWED_ORIGINS: https://app.soylummo.com,https://main.d1999tyl6ud7e5.amplifyapp.com
         run: |
-          python3 -c 'import json, os; json.dump({"Variables": {k: os.environ[k] for k in ("DATABASE_URL", "SECRET_KEY", "ALLOWED_ORIGINS", "IMAGES_BUCKET")} | {"ENVIRONMENT": "prod"}}, open("lambda-env.json", "w"))'
+          umask 077
+          aws lambda get-function-configuration --function-name "$FN" --region "$AWS_REGION" \
+            --query 'Environment' --output json > lambda-env-actual.json
+          python3 - <<'PY'
+          import json, os
+          actual = json.load(open("lambda-env-actual.json")) or {}
+          v = actual.get("Variables") or {}
+          for k in ("DATABASE_URL", "SECRET_KEY", "IMAGES_BUCKET", "ALLOWED_ORIGINS"):
+              nuevo = (os.environ.get("NEW_" + k) or "").strip()
+              if nuevo:
+                  v[k] = nuevo
+          v["ENVIRONMENT"] = "prod"
+          faltan = [k for k in ("DATABASE_URL", "SECRET_KEY") if not v.get(k)]
+          if faltan:
+              raise SystemExit(f"Faltan variables en prod: {faltan}. Abortado para no dejar el Lambda roto.")
+          json.dump({"Variables": v}, open("lambda-env.json", "w"))
+          PY
           aws lambda update-function-configuration \
-            --function-name ${{ secrets.PROD_LAMBDA_FUNCTION }} \
+            --function-name "$FN" \
             --environment file://lambda-env.json \
-            --region ${{ secrets.AWS_REGION }}
-          rm -f lambda-env.json
+            --region "$AWS_REGION"
+          rm -f lambda-env.json lambda-env-actual.json
