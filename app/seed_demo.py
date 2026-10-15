@@ -1,11 +1,13 @@
 """Datos de prueba para ver el dashboard de analítica con volumen.
 
-SOLO PARA LA BD LOCAL. Crea ~36 estudiantes ficticios (correo @demo.lummo.local)
+SOLO PARA LA BD LOCAL O lummo_dev (nunca producción). Crea ~36 estudiantes ficticios (correo @demo.lummo.local)
 con intentos completados, abandonados y vacíos, respuestas con tiempos y una
 dificultad distinta por tema.
 
     docker exec -it backend-backend-1 python -m app.seed_demo            # crear
     docker exec -it backend-backend-1 python -m app.seed_demo --borrar   # quitar
+
+Base de dev en la nube (nunca prod): DATABASE_URL=<url de lummo_dev> python -m app.seed_demo --nube-dev
 """
 import os
 import random
@@ -35,8 +37,13 @@ def _nivel(p):
 
 
 def _verificar_local():
-    if not any(h in DATABASE_URL for h in ("@db:", "@localhost", "@127.0.0.1")) or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
-        sys.exit(f"Abortado: seed_demo solo corre contra la BD local (DATABASE_URL apunta a otro host).")
+    nombre_bd = DATABASE_URL.rsplit("/", 1)[-1].split("?")[0]
+    if "prod" in nombre_bd or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        sys.exit("Abortado: seed_demo nunca corre contra producción.")
+    es_local = any(h in DATABASE_URL for h in ("@db:", "@localhost", "@127.0.0.1"))
+    # La base de dev en la nube solo con permiso explícito
+    if not es_local and not ("--nube-dev" in sys.argv and nombre_bd == "lummo_dev"):
+        sys.exit("Abortado: fuera de local solo se permite lummo_dev, pasando --nube-dev.")
 
 
 def borrar(db):
